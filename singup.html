@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Signup</title>
+</head>
+<body>
+  <h2>Signup</h2>
+
+  <input id="username" placeholder="Username">
+  <input id="password" placeholder="Password" type="password">
+  <button onclick="signup()">Signup</button>
+
+  <p id="msg"></p>
+  <script src="auth.js"></script>
+  <script>
+function signup() {
+
+  fetch("http://127.0.0.1:5000/signup", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      username: document.getElementById("username").value,
+      password: document.getElementById("password").value
+    })
+  })
+
+  .then(res => res.json())
+  .then(data => {
+    document.getElementById("msg").innerText = data.message;
+    alert(data.message);
+  })
+
+  .catch(err => {
+    console.log(err);
+    alert("Server not reachable");
+  });
+
+}
+</script>
+  <script>
+  function signup() {
+
+    fetch("http://127.0.0.1:5000/signup", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value
+      })
+    })
+
+    .then(res => res.json())
+
+    .then(data => {
+
+      // Message on page
+      document.getElementById("msg").innerText = data.message;
+
+      // Popup alert
+      alert(data.message);
+
+    })
+
+    .catch(error => {
+
+      console.log(error);
+
+      alert("Error connecting to server");
+
+    });
+
+  }
+</script>
+</body>
+</html>
