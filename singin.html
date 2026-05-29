@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Signin</title>
+</head>
+<body>
+  <h2>Signin</h2>
+
+  <input id="username" placeholder="Username">
+  <input id="password" placeholder="Password" type="password">
+  <button onclick="signin()">Signin</button>
+
+  <p id="msg"></p>
+
+  <script>
+    function signin() {
+      fetch("/signin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: document.getElementById("username").value,
+          password: document.getElementById("password").value
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById("msg").innerText = data.message;
+      });
+    }
+  </script>
+</body>
+</html>
