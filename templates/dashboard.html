@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZeroKey — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0d0d;
+      --surface:   #161616;
+      --surface2:  #1e1e1e;
+      --border:    #2a2a2a;
+      --accent:    #00e5a0;
+      --accent-dim:#00a372;
+      --text:      #f0f0f0;
+      --muted:     #666;
+      --error:     #ff4d4d;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      min-height: 100vh;
+    }
+
+    /* grid bg */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 40px 40px;
+      opacity: 0.3;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Navbar ── */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(13,13,13,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 32px;
+      height: 60px;
+    }
+
+    .nav-logo {
+      font-family: 'Space Mono', monospace;
+      font-size: 13px;
+      color: var(--accent);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+    }
+
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--surface2);
+      border: 1px solid var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Space Mono', monospace;
+      font-size: 13px;
+      color: var(--accent);
+      cursor: pointer;
+      transition: background .2s;
+      user-select: none;
+    }
+    .avatar:hover { background: #00e5a015; }
+
+    .username-label {
+      font-size: 13px;
+      color: var(--muted);
+      font-family: 'Space Mono', monospace;
+    }
+
+    /* ── Profile dropdown ── */
+    .dropdown {
+      position: absolute;
+      top: calc(100% + 10px);
+      right: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 220px;
+      overflow: hidden;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-8px);
+      transition: opacity .2s, transform .2s;
+      z-index: 200;
+    }
+    .dropdown.open {
+      opacity: 1;
+      pointer-events: all;
+      transform: translateY(0);
+    }
+
+    .dropdown-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .dropdown-header .d-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+    }
+    .dropdown-header .d-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+      font-family: 'Space Mono', monospace;
+    }
+
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+      transition: background .15s;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+    .dropdown-item:hover { background: var(--surface2); }
+    .dropdown-item.danger { color: var(--error); }
+    .dropdown-item svg { width: 15px; height: 15px; opacity: 0.7; flex-shrink: 0; }
+
+    /* ── Main content ── */
+    main {
+      position: relative;
+      z-index: 1;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 48px 24px;
+      animation: fadeUp .4s ease both;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .welcome {
+      margin-bottom: 40px;
+    }
+
+    .welcome-tag {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: var(--accent);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    .welcome h1 {
+      font-size: 32px;
+      font-weight: 500;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+
+    .welcome p {
+      font-size: 15px;
+      color: var(--muted);
+      max-width: 480px;
+      line-height: 1.6;
+    }
+
+    /* ── Status banner ── */
+    .status-banner {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 10px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 32px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .status-text {
+      font-size: 13px;
+      color: var(--text);
+    }
+    .status-text span {
+      color: var(--muted);
+      font-size: 12px;
+      display: block;
+      margin-top: 2px;
+    }
+
+    .fido-badge {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: #000;
+      background: var(--accent);
+      padding: 4px 10px;
+      border-radius: 20px;
+      letter-spacing: 1px;
+    }
+
+    /* ── Cards grid ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      transition: border-color .2s, transform .2s;
+      cursor: default;
+    }
+    .card:hover {
+      border-color: #3a3a3a;
+      transform: translateY(-2px);
+    }
+
+    .card-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 14px;
+    }
+    .card-icon svg { width: 18px; height: 18px; color: var(--accent); }
+
+    .card h3 {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+
+    .card p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .card-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 14px;
+      font-size: 12px;
+      font-family: 'Space Mono', monospace;
+      color: var(--accent);
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0;
+      letter-spacing: 0.5px;
+    }
+    .card-action:hover { text-decoration: underline; }
+    .card-action svg { width: 12px; height: 12px; }
+
+    /* ── Profile modal ── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 300;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .2s;
+    }
+    .modal-overlay.open {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      width: 100%;
+      max-width: 400px;
+      position: relative;
+      transform: scale(0.95);
+      transition: transform .2s;
+    }
+    .modal-overlay.open .modal { transform: scale(1); }
+
+    .modal-close {
+      position: absolute;
+      top: 16px; right: 16px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .modal-close:hover { color: var(--text); }
+
+    .modal h2 {
+      font-size: 18px;
+      font-weight: 500;
+      margin-bottom: 24px;
+    }
+
+    .profile-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    .profile-row:last-of-type { border-bottom: none; }
+    .profile-row .key {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .profile-row .val {
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    #msg { font-size: 13px; text-align: center; margin-top: 8px; min-height: 18px; }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav>
+    <div class="nav-logo">⬡ ZeroKey</div>
+    <div class="nav-right">
+      <span class="username-label" id="nav-username">...</span>
+      <div class="avatar" id="avatar-btn" onclick="toggleDropdown()">A</div>
+
+      <div class="dropdown" id="dropdown">
+        <div class="dropdown-header">
+          <div class="d-name" id="dd-name">Loading...</div>
+          <div class="d-sub" id="dd-username">@username</div>
+        </div>
+        <button class="dropdown-item" onclick="openProfile()">
+          <svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          View Profile
+        </button>
+        <button class="dropdown-item danger" onclick="signout()">
+          <svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1"/></svg>
+          Sign Out
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <main>
+    <div class="welcome">
+      <div class="welcome-tag">Dashboard</div>
+      <h1>Welcome back, <span id="hero-name" style="color:var(--accent)">...</span></h1>
+      <p>Your account is secured. FIDO2 passwordless authentication is coming next.</p>
+    </div>
+
+    <div class="status-banner">
+      <div class="status-left">
+        <div class="status-dot"></div>
+        <div class="status-text">
+          Account active
+          <span>Password login — Stage 3 complete</span>
+        </div>
+      </div>
+      <div class="fido-badge">FIDO2 NEXT →</div>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-icon">
+          <svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+        </div>
+        <h3>Password login</h3>
+        <p>Currently secured with bcrypt hashing and JWT session tokens.</p>
+        <button class="card-action">
+          Active
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">
+          <svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20A10 10 0 0012 2z"/><path d="M12 8v4l3 3"/></svg>
+        </div>
+        <h3>FIDO2 Passkey</h3>
+        <p>Passwordless login via fingerprint or device — coming in Stage 4.</p>
+        <button class="card-action" style="color:var(--muted)">
+          Coming soon
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-icon">
+          <svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        </div>
+        <h3>Your profile</h3>
+        <p>View your name, mobile number, and date of birth stored securely.</p>
+        <button class="card-action" onclick="openProfile()">
+          View profile
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <p id="msg"></p>
+  </main>
+
+  <!-- Profile Modal -->
+  <div class="modal-overlay" id="modal-overlay" onclick="closeProfileOutside(event)">
+    <div class="modal">
+      <button class="modal-close" onclick="closeProfile()">✕</button>
+      <h2>Your Profile</h2>
+      <div class="profile-row">
+        <span class="key">Full Name</span>
+        <span class="val" id="p-name">—</span>
+      </div>
+      <div class="profile-row">
+        <span class="key">Username</span>
+        <span class="val" id="p-username">—</span>
+      </div>
+      <div class="profile-row">
+        <span class="key">Mobile</span>
+        <span class="val" id="p-mobile">—</span>
+      </div>
+      <div class="profile-row">
+        <span class="key">Date of Birth</span>
+        <span class="val" id="p-dob">—</span>
+      </div>
+      <div class="profile-row">
+        <span class="key">Member Since</span>
+        <span class="val" id="p-joined">—</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/auth.js"></script>
+  <script>
+    let userData = {};
+
+    // Load user data on page load
+    async function loadUser() {
+      try {
+        const res  = await fetch("http://127.0.0.1:5000/me", { credentials: "include" });
+        const data = await res.json();
+        if (!data.success) {
+          window.location.href = "signin.html"; return;
+        }
+        userData = data;
+        const name  = data.full_name || data.username;
+        const first = name.split(" ")[0];
+
+        document.getElementById("hero-name").textContent    = first;
+        document.getElementById("nav-username").textContent = "@" + data.username;
+        document.getElementById("avatar-btn").textContent   = first[0].toUpperCase();
+        document.getElementById("dd-name").textContent      = name;
+        document.getElementById("dd-username").textContent  = "@" + data.username;
+
+        document.getElementById("p-name").textContent     = data.full_name || "—";
+        document.getElementById("p-username").textContent = "@" + data.username;
+        document.getElementById("p-mobile").textContent   = data.mobile || "—";
+        document.getElementById("p-dob").textContent      = data.dob || "—";
+        document.getElementById("p-joined").textContent   = data.created_at
+          ? new Date(data.created_at).toLocaleDateString("en-IN", { year:"numeric", month:"long", day:"numeric" })
+          : "—";
+      } catch (e) {
+        window.location.href = "signin.html";
+      }
+    }
+
+    function toggleDropdown() {
+      document.getElementById("dropdown").classList.toggle("open");
+    }
+
+    document.addEventListener("click", e => {
+      const nav = document.querySelector(".nav-right");
+      if (!nav.contains(e.target)) document.getElementById("dropdown").classList.remove("open");
+    });
+
+    function openProfile() {
+      document.getElementById("dropdown").classList.remove("open");
+      document.getElementById("modal-overlay").classList.add("open");
+    }
+    function closeProfile() {
+      document.getElementById("modal-overlay").classList.remove("open");
+    }
+    function closeProfileOutside(e) {
+      if (e.target === document.getElementById("modal-overlay")) closeProfile();
+    }
+
+    async function signout() {
+      await fetch("http://127.0.0.1:5000/logout", { method: "POST", credentials: "include" });
+      window.location.href = "signin.html";
+    }
+
+    loadUser();
+  </script>
+</body>
+</html>
