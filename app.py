@@ -1,5 +1,7 @@
 import os
 import re
+import json 
+import base64
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 
@@ -20,11 +22,33 @@ from pymongo import MongoClient
 from jose import jwt, JWTError
 from dotenv import load_dotenv
 
+import webauthn
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria,
+    UserVerificationRequirement,
+    ResidentKeyRequirement,
+)
+from webauthn.helpers.exceptions import InvalidCBORData
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria,
+    UserVerificationRequirement,
+    ResidentKeyRequirement,
+    PublicKeyCredentialDescriptor,   # ← add this
+)
+
 from db import hash_password, verify_password
+from fido2_store import (
+    save_challenge,
+    get_challenge,
+    save_credential,
+    get_credentials_for_user,
+    get_credential_by_id,
+    update_sign_count,
+)
 
 
 # ─────────────────────────────────────────────────────────────
-# Environment Variables
+# Environment
 # ─────────────────────────────────────────────────────────────
 
 load_dotenv()
@@ -37,13 +61,17 @@ JWT_EXPIRY_MINS = int(os.getenv("JWT_EXPIRY_MINUTES", "60"))
 APP_ORIGIN      = os.getenv("APP_ORIGIN",           "http://localhost:5000")
 IS_PRODUCTION   = os.getenv("FLASK_ENV", "development") == "production"
 
+# FIDO2 config — RP = Relying Party (your server)
+RP_ID   = os.getenv("RP_ID",   "localhost")        # domain only, no http://
+RP_NAME = os.getenv("RP_NAME", "ZeroKey Auth")
+
 
 # ─────────────────────────────────────────────────────────────
-# Flask Setup
+# Flask
 # ─────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
-app.secret_key = FLASK_SECRET          # ← now from .env, not hardcoded
+app.secret_key = FLASK_SECRET
 
 CORS(app, origins=[APP_ORIGIN], supports_credentials=True)
 
@@ -59,9 +87,10 @@ limiter = Limiter(
 # MongoDB
 # ─────────────────────────────────────────────────────────────
 
-client           = MongoClient(MONGO_URI)
-database         = client["users"]
-users_collection = database["mails"]
+client              = MongoClient(MONGO_URI)
+database            = client["users"]
+users_collection    = database["mails"]
+creds_collection    = database["fido2_credentials"]   # ← new
 
 
 # ─────────────────────────────────────────────────────────────
@@ -90,7 +119,6 @@ def issue_jwt(username):
 
 
 def get_current_user():
-    """Verify JWT from cookie. Returns username string or None."""
     token = request.cookies.get("auth_token")
     if not token:
         return None
@@ -101,25 +129,7 @@ def get_current_user():
         return None
 
 
-# ─────────────────────────────────────────────────────────────
-# jwt_required decorator — SERVER-SIDE PROTECTION
-# Wraps any route that needs a logged-in user.
-# Works for both page routes (redirects) and API routes (returns 401).
-# ─────────────────────────────────────────────────────────────
-
 def jwt_required(redirect_on_fail=False):
-    """
-    Decorator that protects a route with JWT verification.
-
-    Usage:
-        @app.route("/dashboard")
-        @jwt_required(redirect_on_fail=True)   # HTML pages  → redirect to /signin
-        def dashboard(): ...
-
-        @app.route("/me")
-        @jwt_required()                        # API routes  → return 401 JSON
-        def me(): ...
-    """
     def decorator(f):
         @wraps(f)
         def wrapped(*args, **kwargs):
@@ -128,7 +138,6 @@ def jwt_required(redirect_on_fail=False):
                 if redirect_on_fail:
                     return redirect("/signin")
                 return jsonify({"success": False, "message": "Not authenticated"}), 401
-            # Inject username into the function via Flask's g object substitute
             request.current_user = username
             return f(*args, **kwargs)
         return wrapped
@@ -136,12 +145,11 @@ def jwt_required(redirect_on_fail=False):
 
 
 # ─────────────────────────────────────────────────────────────
-# Page Routes
+# Page routes
 # ─────────────────────────────────────────────────────────────
 
 @app.route("/")
 def home():
-    # If already logged in, send straight to dashboard
     if get_current_user():
         return redirect("/dashboard")
     return render_template("signup.html")
@@ -155,11 +163,9 @@ def signin_page():
 
 
 @app.route("/dashboard")
-@jwt_required(redirect_on_fail=True)      # ← SERVER-SIDE: JWT verified here
+@jwt_required(redirect_on_fail=True)
 def dashboard():
     return render_template("dashboard.html")
-    # Note: username is NOT passed via template anymore.
-    # dashboard.html fetches /me with the JWT cookie — single source of truth.
 
 
 # ─────────────────────────────────────────────────────────────
@@ -182,16 +188,12 @@ def signup():
     error = validate_input(username, password)
     if error:
         return jsonify({"success": False, "message": error}), 400
-
     if not full_name:
         return jsonify({"success": False, "message": "Full name is required"}), 400
-
     if not re.match(r"^\d{10}$", mobile):
         return jsonify({"success": False, "message": "Enter a valid 10-digit mobile number"}), 400
-
     if not dob:
         return jsonify({"success": False, "message": "Date of birth is required"}), 400
-
     if users_collection.find_one({"username": username}):
         return jsonify({"success": False, "message": "Username already taken"}), 409
 
@@ -204,7 +206,6 @@ def signup():
         "created_at": datetime.now(timezone.utc),
         "is_active":  True
     })
-
     return jsonify({"success": True, "message": "Account created successfully"}), 201
 
 
@@ -226,8 +227,6 @@ def signin():
         return jsonify({"success": False, "message": "Username and password are required"}), 400
 
     user = users_collection.find_one({"username": username})
-
-    # Same error for "not found" and "wrong password" — prevents username enumeration
     if not user:
         return jsonify({"success": False, "message": "Invalid credentials"}), 401
 
@@ -239,54 +238,238 @@ def signin():
     if not valid:
         return jsonify({"success": False, "message": "Invalid credentials"}), 401
 
-    # Set Flask session AND issue JWT cookie — both cleared on logout
     session["username"] = username
     token    = issue_jwt(username)
     response = make_response(jsonify({"success": True, "message": "Login successful"}))
     response.set_cookie(
-        "auth_token",
-        token,
-        httponly=True,
-        samesite="Lax",
-        secure=IS_PRODUCTION,          # ← True on live (HTTPS), False locally
+        "auth_token", token,
+        httponly=True, samesite="Lax",
+        secure=IS_PRODUCTION,
         max_age=JWT_EXPIRY_MINS * 60
     )
     return response
 
 
 # ─────────────────────────────────────────────────────────────
-# Signout
+# Logout
 # ─────────────────────────────────────────────────────────────
 
-@app.route("/signout", methods=["POST"])
-def signout():
+@app.route("/logout", methods=["POST"])
+def logout():
     session.clear()
-    response = make_response(jsonify({"success": True, "message": "Signed out"}))
+    response = make_response(jsonify({"success": True, "message": "Logged out"}))
     response.delete_cookie("auth_token")
     return response
 
 
 # ─────────────────────────────────────────────────────────────
-# /me — Protected API: returns current user's profile
+# /me
 # ─────────────────────────────────────────────────────────────
 
 @app.route("/me")
-@jwt_required()                           # ← API route: returns 401 if not authed
+@jwt_required()
 def me():
     username = request.current_user
     user = users_collection.find_one({"username": username}, {"_id": 0, "password": 0})
-
     if not user:
         return jsonify({"success": False, "message": "User not found"}), 404
 
+    # Also tell the dashboard how many passkeys this user has registered
+    passkey_count = creds_collection.count_documents({"username": username})
+
     return jsonify({
-        "success":    True,
-        "username":   user.get("username"),
-        "full_name":  user.get("full_name"),
-        "mobile":     user.get("mobile"),
-        "dob":        user.get("dob"),
-        "created_at": str(user.get("created_at"))
+        "success":       True,
+        "username":      user.get("username"),
+        "full_name":     user.get("full_name"),
+        "mobile":        user.get("mobile"),
+        "dob":           user.get("dob"),
+        "created_at":    str(user.get("created_at")),
+        "passkey_count": passkey_count          # ← dashboard uses this
     })
+
+
+# ─────────────────────────────────────────────────────────────
+# FIDO2 — Registration
+#
+# Flow:
+#   1. User is logged in with password, sees "Register passkey" on dashboard
+#   2. POST /fido2/register/begin   → server sends options to browser
+#   3. Browser asks OS for fingerprint/face, signs the challenge
+#   4. POST /fido2/register/complete → server verifies + saves public key
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/fido2/register/begin", methods=["POST"])
+@jwt_required()
+@limiter.limit("10 per minute")
+def fido2_register_begin():
+    username = request.current_user
+
+    # Get existing credentials so the browser won't re-register the same device
+    existing = get_credentials_for_user(creds_collection, username)
+    exclude_credentials = [
+        {"id": c["credential_id"], "type": "public-key"}
+        for c in existing
+    ]
+
+    options = webauthn.generate_registration_options(
+        rp_id=RP_ID,
+        rp_name=RP_NAME,
+        user_name=username,
+        user_display_name=username,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            user_verification=UserVerificationRequirement.REQUIRED,
+            resident_key=ResidentKeyRequirement.PREFERRED,
+        ),
+        exclude_credentials=exclude_credentials,
+    )
+
+    # Store challenge — browser must return this exact value signed
+    save_challenge(username, options.challenge)
+
+    
+    return app.response_class(
+    response=webauthn.options_to_json(options),
+    mimetype="application/json"
+)
+
+
+@app.route("/fido2/register/complete", methods=["POST"])
+@jwt_required()
+@limiter.limit("10 per minute")
+def fido2_register_complete():
+    username = request.current_user
+    data     = request.get_json(silent=True)
+
+    if not data:
+        return jsonify({"success": False, "message": "No data received"}), 400
+
+    # Retrieve the stored challenge (single-use — deleted on retrieval)
+    challenge = get_challenge(username)
+    if not challenge:
+        return jsonify({"success": False, "message": "Challenge expired — please try again"}), 400
+
+    try:
+        verification = webauthn.verify_registration_response(
+            credential=data,
+            expected_challenge=challenge,
+            expected_rp_id=RP_ID,
+            expected_origin=APP_ORIGIN,
+            require_user_verification=True,
+        )
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Verification failed: {str(e)}"}), 400
+
+    # Save public key to MongoDB
+    save_credential(creds_collection, username, verification)
+
+    return jsonify({"success": True, "message": "Passkey registered successfully"})
+
+
+# ─────────────────────────────────────────────────────────────
+# FIDO2 — Authentication (Login)
+#
+# Flow:
+#   1. User types username → clicks "Use Passkey"
+#   2. POST /fido2/auth/begin   → server sends challenge + allowed credentials
+#   3. Browser asks Windows Hello / fingerprint to sign the challenge
+#   4. POST /fido2/auth/complete → server verifies signature → issues JWT
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/fido2/auth/begin", methods=["POST"])
+@limiter.limit("10 per minute")
+def fido2_auth_begin():
+    data     = request.get_json(silent=True)
+    username = (data or {}).get("username", "").strip()
+
+    if not username:
+        return jsonify({"success": False, "message": "Username is required"}), 400
+
+    # Check user exists
+    user = users_collection.find_one({"username": username})
+    if not user:
+        return jsonify({"success": False, "message": "User not found"}), 404
+
+    # Get all passkeys registered by this user
+    credentials = get_credentials_for_user(creds_collection, username)
+    if not credentials:
+        return jsonify({"success": False, "message": "No passkey registered. Please register one first."}), 400
+
+    allow_credentials = [
+    PublicKeyCredentialDescriptor(id=c["credential_id"])
+    for c in credentials
+    ]
+
+    options = webauthn.generate_authentication_options(
+        rp_id=RP_ID,
+        allow_credentials=allow_credentials,
+        user_verification=UserVerificationRequirement.REQUIRED,
+    )
+
+    # Store challenge keyed to username
+    save_challenge(username, options.challenge)
+
+    return app.response_class(
+        response=webauthn.options_to_json(options),
+        mimetype="application/json"
+    )
+
+
+@app.route("/fido2/auth/complete", methods=["POST"])
+@limiter.limit("10 per minute")
+def fido2_auth_complete():
+    data     = request.get_json(silent=True)
+    username = (data or {}).get("username", "").strip()
+
+    if not username or not data:
+        return jsonify({"success": False, "message": "Invalid request"}), 400
+
+    # Retrieve single-use challenge
+    challenge = get_challenge(username)
+    if not challenge:
+        return jsonify({"success": False, "message": "Challenge expired — try again"}), 400
+
+    # Find the credential being used by its ID
+    
+    credential_id_raw = data.get("rawId") or data.get("id")
+    if not credential_id_raw:
+        return jsonify({"success": False, "message": "Missing credential ID"}), 400
+
+    try:
+        padded = credential_id_raw + "=" * (-len(credential_id_raw) % 4)
+        credential_id_bytes = base64.urlsafe_b64decode(padded)
+    except Exception:
+        return jsonify({"success": False, "message": "Invalid credential ID format"}), 400
+
+    stored = get_credential_by_id(creds_collection, credential_id_bytes)
+    if not stored:
+        return jsonify({"success": False, "message": "Passkey not recognised"}), 400
+
+    try:
+        verification = webauthn.verify_authentication_response(
+            credential=data,
+            expected_challenge=challenge,
+            expected_rp_id=RP_ID,
+            expected_origin=APP_ORIGIN,
+            credential_public_key=stored["public_key"],
+            credential_current_sign_count=stored["sign_count"],
+            require_user_verification=True,
+        )
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Verification failed: {str(e)}"}), 400
+
+    # Update sign count (replay attack protection)
+    update_sign_count(creds_collection, credential_id_bytes, verification.new_sign_count)
+
+    # Issue JWT — same as password login
+    token    = issue_jwt(username)
+    response = make_response(jsonify({"success": True, "message": "Passkey login successful"}))
+    response.set_cookie(
+        "auth_token", token,
+        httponly=True, samesite="Lax",
+        secure=IS_PRODUCTION,
+        max_age=JWT_EXPIRY_MINS * 60
+    )
+    return response
 
 
 # ─────────────────────────────────────────────────────────────

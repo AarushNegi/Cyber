@@ -1,0 +1,10 @@
+flask
+flask-cors
+flask-limiter
+pymongo[srv]
+bcrypt
+python-jose[cryptography]
+python-dotenv
+gunicorn
+webauthn
+cachetools
