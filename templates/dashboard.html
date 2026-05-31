@@ -507,7 +507,7 @@
     // Load user data on page load
     async function loadUser() {
       try {
-        const res  = await fetch("http://127.0.0.1:5000/me", { credentials: "include" });
+        const res  = await fetch("/me", { credentials: "include" });
         const data = await res.json();
         if (!data.success) {
           window.location.href = "signin.html"; return;
@@ -555,8 +555,8 @@
     }
 
     async function signout() {
-      await fetch("http://127.0.0.1:5000/logout", { method: "POST", credentials: "include" });
-      window.location.href = "signin.html";
+      await fetch("/signout", { method: "POST", credentials: "include" });
+      window.location.href = "/signin";
     }
 
     loadUser();
