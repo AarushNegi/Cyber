@@ -44,6 +44,7 @@ from fido2_store import (
     get_credentials_for_user,
     get_credential_by_id,
     update_sign_count,
+    delete_credential,
 )
 
 
@@ -307,7 +308,7 @@ def fido2_register_begin():
     # Get existing credentials so the browser won't re-register the same device
     existing = get_credentials_for_user(creds_collection, username)
     exclude_credentials = [
-        {"id": c["credential_id"], "type": "public-key"}
+        PublicKeyCredentialDescriptor(id=c["credential_id"])
         for c in existing
     ]
 
@@ -363,6 +364,67 @@ def fido2_register_complete():
     save_credential(creds_collection, username, verification)
 
     return jsonify({"success": True, "message": "Passkey registered successfully"})
+
+
+# ─────────────────────────────────────────────────────────────
+# FIDO2 — Passkey Management (Stage 4)
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/fido2/credentials", methods=["GET"])
+@jwt_required()
+def list_credentials():
+    """Return all passkeys for the logged-in user."""
+    username = request.current_user
+    creds    = get_credentials_for_user(creds_collection, username)
+    result   = []
+    for c in creds:
+        result.append({
+            "id":          c["credential_id"].hex() if isinstance(c["credential_id"], bytes) else str(c["credential_id"]),
+            "device_name": c.get("device_name", "My device"),
+            "created_at":  str(c.get("created_at", "")),
+            "last_used_at":str(c.get("last_used_at", "")),
+        })
+    return jsonify({"success": True, "credentials": result})
+
+
+@app.route("/fido2/credential/<cred_id>", methods=["DELETE"])
+@jwt_required()
+def delete_credential_route(cred_id):
+    """Delete a passkey by its hex ID. Safety: cannot delete last passkey."""
+    username = request.current_user
+    total    = creds_collection.count_documents({"username": username})
+    if total <= 1:
+        return jsonify({"success": False, "message": "Cannot delete your only passkey — you would be locked out"}), 400
+    try:
+        cred_bytes = bytes.fromhex(cred_id)
+    except ValueError:
+        return jsonify({"success": False, "message": "Invalid credential ID"}), 400
+    deleted = delete_credential(creds_collection, cred_bytes, username)
+    if not deleted:
+        return jsonify({"success": False, "message": "Passkey not found"}), 404
+    return jsonify({"success": True, "message": "Passkey deleted"})
+
+
+@app.route("/fido2/credential/<cred_id>/rename", methods=["PATCH"])
+@jwt_required()
+def rename_credential(cred_id):
+    """Rename a passkey device label."""
+    username = request.current_user
+    data     = request.get_json(silent=True)
+    new_name = (data or {}).get("name", "").strip()
+    if not new_name or len(new_name) > 40:
+        return jsonify({"success": False, "message": "Name must be 1–40 characters"}), 400
+    try:
+        cred_bytes = bytes.fromhex(cred_id)
+    except ValueError:
+        return jsonify({"success": False, "message": "Invalid credential ID"}), 400
+    result = creds_collection.update_one(
+        {"credential_id": cred_bytes, "username": username},
+        {"$set": {"device_name": new_name}}
+    )
+    if result.matched_count == 0:
+        return jsonify({"success": False, "message": "Passkey not found"}), 404
+    return jsonify({"success": True, "message": "Passkey renamed"})
 
 
 # ─────────────────────────────────────────────────────────────
