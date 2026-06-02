@@ -1,6 +1,6 @@
 import os
 import re
-import json 
+import json
 import base64
 from datetime import datetime, timezone, timedelta
 from functools import wraps
@@ -12,7 +12,8 @@ from flask import (
     make_response,
     render_template,
     session,
-    redirect
+    redirect,
+    url_for,
 )
 
 from flask_cors import CORS
@@ -21,20 +22,16 @@ from flask_limiter.util import get_remote_address
 from pymongo import MongoClient
 from jose import jwt, JWTError
 from dotenv import load_dotenv
+from authlib.integrations.flask_client import OAuth
 
 import webauthn
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria,
     UserVerificationRequirement,
     ResidentKeyRequirement,
+    PublicKeyCredentialDescriptor,
 )
 from webauthn.helpers.exceptions import InvalidCBORData
-from webauthn.helpers.structs import (
-    AuthenticatorSelectionCriteria,
-    UserVerificationRequirement,
-    ResidentKeyRequirement,
-    PublicKeyCredentialDescriptor,   # ← add this
-)
 
 from db import hash_password, verify_password
 from fido2_store import (
@@ -54,17 +51,17 @@ from fido2_store import (
 
 load_dotenv()
 
-MONGO_URI       = os.getenv("MONGO_URI",           "mongodb://localhost:27017/")
-JWT_SECRET      = os.getenv("JWT_SECRET",           "change-this-secret")
-FLASK_SECRET    = os.getenv("FLASK_SECRET_KEY",     "change-this-secret")
-JWT_ALGORITHM   = "HS256"
-JWT_EXPIRY_MINS = int(os.getenv("JWT_EXPIRY_MINUTES", "60"))
-APP_ORIGIN      = os.getenv("APP_ORIGIN",           "http://localhost:5000")
-IS_PRODUCTION   = os.getenv("FLASK_ENV", "development") == "production"
-
-# FIDO2 config — RP = Relying Party (your server)
-RP_ID   = os.getenv("RP_ID",   "localhost")        # domain only, no http://
-RP_NAME = os.getenv("RP_NAME", "ZeroKey Auth")
+MONGO_URI           = os.getenv("MONGO_URI",           "mongodb://localhost:27017/")
+JWT_SECRET          = os.getenv("JWT_SECRET",           "change-this-secret")
+FLASK_SECRET        = os.getenv("FLASK_SECRET_KEY",     "change-this-secret")
+JWT_ALGORITHM       = "HS256"
+JWT_EXPIRY_MINS     = int(os.getenv("JWT_EXPIRY_MINUTES", "60"))
+APP_ORIGIN          = os.getenv("APP_ORIGIN",           "http://localhost:5000")
+IS_PRODUCTION       = os.getenv("FLASK_ENV", "development") == "production"
+RP_ID               = os.getenv("RP_ID",   "localhost")
+RP_NAME             = os.getenv("RP_NAME", "ZeroKey Auth")
+GOOGLE_CLIENT_ID    = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET= os.getenv("GOOGLE_CLIENT_SECRET")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -83,15 +80,28 @@ limiter = Limiter(
     storage_uri="memory://"
 )
 
+# ─────────────────────────────────────────────────────────────
+# Google OAuth setup
+# ─────────────────────────────────────────────────────────────
+
+oauth = OAuth(app)
+google = oauth.register(
+    name="google",
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
+
 
 # ─────────────────────────────────────────────────────────────
 # MongoDB
 # ─────────────────────────────────────────────────────────────
 
-client              = MongoClient(MONGO_URI)
-database            = client["users"]
-users_collection    = database["mails"]
-creds_collection    = database["fido2_credentials"]   # ← new
+client           = MongoClient(MONGO_URI)
+database         = client["users"]
+users_collection = database["mails"]
+creds_collection = database["fido2_credentials"]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -110,11 +120,12 @@ def validate_input(username, password):
     return None
 
 
-def issue_jwt(username):
+def issue_jwt(username, auth_method="password"):
     payload = {
-        "sub": username,
-        "iat": datetime.now(timezone.utc),
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRY_MINS)
+        "sub":         username,
+        "auth_method": auth_method,
+        "iat":         datetime.now(timezone.utc),
+        "exp":         datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRY_MINS)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -199,19 +210,20 @@ def signup():
         return jsonify({"success": False, "message": "Username already taken"}), 409
 
     users_collection.insert_one({
-        "username":   username,
-        "password":   hash_password(password),
-        "full_name":  full_name,
-        "mobile":     mobile,
-        "dob":        dob,
-        "created_at": datetime.now(timezone.utc),
-        "is_active":  True
+        "username":    username,
+        "password":    hash_password(password),
+        "full_name":   full_name,
+        "mobile":      mobile,
+        "dob":         dob,
+        "auth_method": "password",
+        "created_at":  datetime.now(timezone.utc),
+        "is_active":   True
     })
     return jsonify({"success": True, "message": "Account created successfully"}), 201
 
 
 # ─────────────────────────────────────────────────────────────
-# Signin
+# Signin — password
 # ─────────────────────────────────────────────────────────────
 
 @app.route("/signin", methods=["POST"])
@@ -240,7 +252,7 @@ def signin():
         return jsonify({"success": False, "message": "Invalid credentials"}), 401
 
     session["username"] = username
-    token    = issue_jwt(username)
+    token    = issue_jwt(username, auth_method="password")
     response = make_response(jsonify({"success": True, "message": "Login successful"}))
     response.set_cookie(
         "auth_token", token,
@@ -249,6 +261,102 @@ def signin():
         max_age=JWT_EXPIRY_MINS * 60
     )
     return response
+
+
+# ─────────────────────────────────────────────────────────────
+# Google OAuth
+#
+# Flow:
+#   1. User clicks "Sign in with Google" on signin page
+#   2. GET /auth/google          → redirects to Google login
+#   3. Google redirects back to  → GET /auth/google/callback
+#   4. We get user info from Google, find/create user in MongoDB
+#   5. Issue JWT → redirect to dashboard
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/auth/google")
+def google_login():
+    """Redirect user to Google's OAuth consent screen."""
+    redirect_uri = APP_ORIGIN + "/auth/google/callback"
+    return google.authorize_redirect(redirect_uri)
+
+
+@app.route("/auth/google/callback")
+def google_callback():
+    """Handle Google's redirect back after login."""
+    try:
+        token       = google.authorize_access_token()
+        user_info   = token.get("userinfo")
+
+        if not user_info:
+            return redirect("/signin?error=google_failed")
+
+        google_id   = user_info.get("sub")           # unique Google user ID
+        email       = user_info.get("email")
+        full_name   = user_info.get("name", "")
+        picture     = user_info.get("picture", "")
+
+        # Use email prefix as username (e.g. john from john@gmail.com)
+        # Clean it to match our username rules
+        base_username = re.sub(r"[^a-zA-Z0-9_.-]", "_", email.split("@")[0])[:32]
+
+        # Find existing user by google_id OR email
+        user = users_collection.find_one({
+            "$or": [
+                {"google_id": google_id},
+                {"email": email}
+            ]
+        })
+
+        if user:
+            # Existing user — update Google info if needed
+            users_collection.update_one(
+                {"_id": user["_id"]},
+                {"$set": {
+                    "google_id":   google_id,
+                    "picture":     picture,
+                    "last_login":  datetime.now(timezone.utc),
+                }}
+            )
+            username = user["username"]
+        else:
+            # New user via Google — create account automatically
+            # Make sure username is unique
+            username    = base_username
+            counter     = 1
+            while users_collection.find_one({"username": username}):
+                username = f"{base_username}{counter}"
+                counter += 1
+
+            users_collection.insert_one({
+                "username":    username,
+                "full_name":   full_name,
+                "email":       email,
+                "google_id":   google_id,
+                "picture":     picture,
+                "password":    None,            # no password for Google users
+                "mobile":      "",
+                "dob":         "",
+                "auth_method": "google",
+                "created_at":  datetime.now(timezone.utc),
+                "is_active":   True,
+            })
+
+        # Issue JWT and set cookie — same as password login
+        session["username"] = username
+        jwt_token = issue_jwt(username, auth_method="google")
+        response  = make_response(redirect("/dashboard"))
+        response.set_cookie(
+            "auth_token", jwt_token,
+            httponly=True, samesite="Lax",
+            secure=IS_PRODUCTION,
+            max_age=JWT_EXPIRY_MINS * 60
+        )
+        return response
+
+    except Exception as e:
+        print(f"Google OAuth error: {e}")
+        return redirect("/signin?error=google_failed")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -271,11 +379,10 @@ def logout():
 @jwt_required()
 def me():
     username = request.current_user
-    user = users_collection.find_one({"username": username}, {"_id": 0, "password": 0})
+    user     = users_collection.find_one({"username": username}, {"_id": 0, "password": 0})
     if not user:
         return jsonify({"success": False, "message": "User not found"}), 404
 
-    # Also tell the dashboard how many passkeys this user has registered
     passkey_count = creds_collection.count_documents({"username": username})
 
     return jsonify({
@@ -284,19 +391,16 @@ def me():
         "full_name":     user.get("full_name"),
         "mobile":        user.get("mobile"),
         "dob":           user.get("dob"),
+        "email":         user.get("email", ""),
+        "picture":       user.get("picture", ""),
+        "auth_method":   user.get("auth_method", "password"),
         "created_at":    str(user.get("created_at")),
-        "passkey_count": passkey_count          # ← dashboard uses this
+        "passkey_count": passkey_count
     })
 
 
 # ─────────────────────────────────────────────────────────────
 # FIDO2 — Registration
-#
-# Flow:
-#   1. User is logged in with password, sees "Register passkey" on dashboard
-#   2. POST /fido2/register/begin   → server sends options to browser
-#   3. Browser asks OS for fingerprint/face, signs the challenge
-#   4. POST /fido2/register/complete → server verifies + saves public key
 # ─────────────────────────────────────────────────────────────
 
 @app.route("/fido2/register/begin", methods=["POST"])
@@ -305,7 +409,6 @@ def me():
 def fido2_register_begin():
     username = request.current_user
 
-    # Get existing credentials so the browser won't re-register the same device
     existing = get_credentials_for_user(creds_collection, username)
     exclude_credentials = [
         PublicKeyCredentialDescriptor(id=c["credential_id"])
@@ -324,27 +427,24 @@ def fido2_register_begin():
         exclude_credentials=exclude_credentials,
     )
 
-    # Store challenge — browser must return this exact value signed
     save_challenge(username, options.challenge)
 
-    
     return app.response_class(
-    response=webauthn.options_to_json(options),
-    mimetype="application/json"
-)
+        response=webauthn.options_to_json(options),
+        mimetype="application/json"
+    )
 
 
 @app.route("/fido2/register/complete", methods=["POST"])
 @jwt_required()
 @limiter.limit("10 per minute")
 def fido2_register_complete():
-    username = request.current_user
-    data     = request.get_json(silent=True)
+    username  = request.current_user
+    data      = request.get_json(silent=True)
 
     if not data:
         return jsonify({"success": False, "message": "No data received"}), 400
 
-    # Retrieve the stored challenge (single-use — deleted on retrieval)
     challenge = get_challenge(username)
     if not challenge:
         return jsonify({"success": False, "message": "Challenge expired — please try again"}), 400
@@ -360,29 +460,26 @@ def fido2_register_complete():
     except Exception as e:
         return jsonify({"success": False, "message": f"Verification failed: {str(e)}"}), 400
 
-    # Save public key to MongoDB
     save_credential(creds_collection, username, verification)
-
     return jsonify({"success": True, "message": "Passkey registered successfully"})
 
 
 # ─────────────────────────────────────────────────────────────
-# FIDO2 — Passkey Management (Stage 4)
+# FIDO2 — Passkey Management
 # ─────────────────────────────────────────────────────────────
 
 @app.route("/fido2/credentials", methods=["GET"])
 @jwt_required()
 def list_credentials():
-    """Return all passkeys for the logged-in user."""
     username = request.current_user
     creds    = get_credentials_for_user(creds_collection, username)
     result   = []
     for c in creds:
         result.append({
-            "id":          c["credential_id"].hex() if isinstance(c["credential_id"], bytes) else str(c["credential_id"]),
-            "device_name": c.get("device_name", "My device"),
-            "created_at":  str(c.get("created_at", "")),
-            "last_used_at":str(c.get("last_used_at", "")),
+            "id":           c["credential_id"].hex() if isinstance(c["credential_id"], bytes) else str(c["credential_id"]),
+            "device_name":  c.get("device_name", "My device"),
+            "created_at":   str(c.get("created_at", "")),
+            "last_used_at": str(c.get("last_used_at", "")),
         })
     return jsonify({"success": True, "credentials": result})
 
@@ -390,7 +487,6 @@ def list_credentials():
 @app.route("/fido2/credential/<cred_id>", methods=["DELETE"])
 @jwt_required()
 def delete_credential_route(cred_id):
-    """Delete a passkey by its hex ID. Safety: cannot delete last passkey."""
     username = request.current_user
     total    = creds_collection.count_documents({"username": username})
     if total <= 1:
@@ -408,7 +504,6 @@ def delete_credential_route(cred_id):
 @app.route("/fido2/credential/<cred_id>/rename", methods=["PATCH"])
 @jwt_required()
 def rename_credential(cred_id):
-    """Rename a passkey device label."""
     username = request.current_user
     data     = request.get_json(silent=True)
     new_name = (data or {}).get("name", "").strip()
@@ -428,13 +523,7 @@ def rename_credential(cred_id):
 
 
 # ─────────────────────────────────────────────────────────────
-# FIDO2 — Authentication (Login)
-#
-# Flow:
-#   1. User types username → clicks "Use Passkey"
-#   2. POST /fido2/auth/begin   → server sends challenge + allowed credentials
-#   3. Browser asks Windows Hello / fingerprint to sign the challenge
-#   4. POST /fido2/auth/complete → server verifies signature → issues JWT
+# FIDO2 — Authentication
 # ─────────────────────────────────────────────────────────────
 
 @app.route("/fido2/auth/begin", methods=["POST"])
@@ -446,19 +535,17 @@ def fido2_auth_begin():
     if not username:
         return jsonify({"success": False, "message": "Username is required"}), 400
 
-    # Check user exists
     user = users_collection.find_one({"username": username})
     if not user:
         return jsonify({"success": False, "message": "User not found"}), 404
 
-    # Get all passkeys registered by this user
     credentials = get_credentials_for_user(creds_collection, username)
     if not credentials:
         return jsonify({"success": False, "message": "No passkey registered. Please register one first."}), 400
 
     allow_credentials = [
-    PublicKeyCredentialDescriptor(id=c["credential_id"])
-    for c in credentials
+        PublicKeyCredentialDescriptor(id=c["credential_id"])
+        for c in credentials
     ]
 
     options = webauthn.generate_authentication_options(
@@ -467,7 +554,6 @@ def fido2_auth_begin():
         user_verification=UserVerificationRequirement.REQUIRED,
     )
 
-    # Store challenge keyed to username
     save_challenge(username, options.challenge)
 
     return app.response_class(
@@ -485,19 +571,16 @@ def fido2_auth_complete():
     if not username or not data:
         return jsonify({"success": False, "message": "Invalid request"}), 400
 
-    # Retrieve single-use challenge
     challenge = get_challenge(username)
     if not challenge:
         return jsonify({"success": False, "message": "Challenge expired — try again"}), 400
 
-    # Find the credential being used by its ID
-    
     credential_id_raw = data.get("rawId") or data.get("id")
     if not credential_id_raw:
         return jsonify({"success": False, "message": "Missing credential ID"}), 400
 
     try:
-        padded = credential_id_raw + "=" * (-len(credential_id_raw) % 4)
+        padded              = credential_id_raw + "=" * (-len(credential_id_raw) % 4)
         credential_id_bytes = base64.urlsafe_b64decode(padded)
     except Exception:
         return jsonify({"success": False, "message": "Invalid credential ID format"}), 400
@@ -519,11 +602,9 @@ def fido2_auth_complete():
     except Exception as e:
         return jsonify({"success": False, "message": f"Verification failed: {str(e)}"}), 400
 
-    # Update sign count (replay attack protection)
     update_sign_count(creds_collection, credential_id_bytes, verification.new_sign_count)
 
-    # Issue JWT — same as password login
-    token    = issue_jwt(username)
+    token    = issue_jwt(username, auth_method="fido2")
     response = make_response(jsonify({"success": True, "message": "Passkey login successful"}))
     response.set_cookie(
         "auth_token", token,
