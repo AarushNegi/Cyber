@@ -183,7 +183,10 @@ def dashboard():
 # ─────────────────────────────────────────────────────────────
 # Signup
 # ─────────────────────────────────────────────────────────────
-
+def signup():
+    data = request.get_json(silent=True)
+    if os.getenv("REGISTRATION_OPEN", "true") == "false":
+        return jsonify({"success": False, "message": "Registration is currently closed"}), 403
 @app.route("/signup", methods=["POST"])
 @limiter.limit("10 per minute")
 def signup():
@@ -320,6 +323,9 @@ def google_callback():
             )
             username = user["username"]
         else:
+            # Block new registrations if closed
+            if os.getenv("REGISTRATION_OPEN", "true") == "false":
+                return redirect("/signin?error=registration_closed")
             # New user via Google — create account automatically
             # Make sure username is unique
             username    = base_username

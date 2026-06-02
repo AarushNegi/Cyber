@@ -60,11 +60,16 @@
   <script src="/static/auth.js"></script>
   <script>
     const params = new URLSearchParams(window.location.search);
-    if (params.get("error") === "google_failed") {
-      const banner = document.getElementById("error-banner");
-      banner.textContent = "Google sign-in failed — please try again";
-      banner.style.display = "block";
-    }
+    const errorMap = {
+  "google_failed":        "Google sign-in failed — please try again",
+  "registration_closed":  "Registration is currently closed"
+};
+const errMsg = errorMap[params.get("error")];
+if (errMsg) {
+  const banner = document.getElementById("error-banner");
+  banner.textContent = errMsg;
+  banner.style.display = "block";
+}
   </script>
 </body>
 </html>
