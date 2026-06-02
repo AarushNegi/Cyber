@@ -183,13 +183,12 @@ def dashboard():
 # ─────────────────────────────────────────────────────────────
 # Signup
 # ─────────────────────────────────────────────────────────────
-def signup():
-    data = request.get_json(silent=True)
-    if os.getenv("REGISTRATION_OPEN", "true") == "false":
-        return jsonify({"success": False, "message": "Registration is currently closed"}), 403
 @app.route("/signup", methods=["POST"])
 @limiter.limit("10 per minute")
 def signup():
+    if os.getenv("REGISTRATION_OPEN", "true") == "false":
+        return jsonify({"success": False, "message": "Registration is currently closed"}), 403
+
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"success": False, "message": "Invalid JSON body"}), 400
@@ -199,7 +198,7 @@ def signup():
     full_name = data.get("full_name", "").strip()
     mobile    = data.get("mobile",    "").strip()
     dob       = data.get("dob",       "").strip()
-
+    
     error = validate_input(username, password)
     if error:
         return jsonify({"success": False, "message": error}), 400
