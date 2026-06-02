@@ -19,6 +19,7 @@ from flask import (
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_talisman import Talisman
 from pymongo import MongoClient
 from jose import jwt, JWTError
 from dotenv import load_dotenv
@@ -78,6 +79,58 @@ limiter = Limiter(
     app=app,
     default_limits=["200 per day", "50 per hour"],
     storage_uri="memory://"
+)
+
+# ─────────────────────────────────────────────────────────────
+# Session cookie hardening
+# ─────────────────────────────────────────────────────────────
+
+app.config['SESSION_COOKIE_SECURE']   = IS_PRODUCTION
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# ─────────────────────────────────────────────────────────────
+# Security headers — Flask-Talisman
+# ─────────────────────────────────────────────────────────────
+
+csp = {
+    'default-src': ["'self'"],
+    'script-src': [
+        "'self'",
+        "https://accounts.google.com",
+        "https://apis.google.com",
+    ],
+    'style-src': [
+        "'self'",
+        "'unsafe-inline'",
+        "https://fonts.googleapis.com",
+    ],
+    'font-src': [
+        "'self'",
+        "https://fonts.gstatic.com",
+    ],
+    'img-src': [
+        "'self'",
+        "data:",
+        "https://lh3.googleusercontent.com",
+    ],
+    'frame-src': [
+        "https://accounts.google.com",
+    ],
+    'connect-src': ["'self'"],
+}
+
+Talisman(
+    app,
+    force_https=IS_PRODUCTION,
+    strict_transport_security=IS_PRODUCTION,
+    strict_transport_security_max_age=31536000,
+    strict_transport_security_include_subdomains=True,
+    content_security_policy=csp,
+    x_content_type_options=True,
+    x_xss_protection=True,
+    referrer_policy='strict-origin-when-cross-origin',
+    frame_options='DENY',
 )
 
 # ─────────────────────────────────────────────────────────────
