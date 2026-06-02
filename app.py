@@ -223,6 +223,18 @@ def signup():
     })
     return jsonify({"success": True, "message": "Account created successfully"}), 201
 
+#-------------------------------------------------------------
+# Terms and Privacy routes
+#-------------------------------------------------------------
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html")
+
+@app.route("/terms")
+def terms():
+    return render_template("terms.html")
+
 
 # ─────────────────────────────────────────────────────────────
 # Signin — password

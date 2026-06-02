@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy — ZeroKey</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .policy-wrap {
+      max-width: 720px; margin: 0 auto;
+      padding: 60px 24px; position: relative; z-index: 1;
+    }
+    .policy-wrap h1 { font-size: 28px; margin-bottom: 8px; }
+    .policy-wrap .updated { font-size: 12px; color: var(--muted); font-family: 'Space Mono', monospace; margin-bottom: 40px; }
+    .policy-wrap h2 { font-size: 15px; font-family: 'Space Mono', monospace; color: var(--accent); letter-spacing: 1px; text-transform: uppercase; margin: 32px 0 10px; }
+    .policy-wrap p, .policy-wrap li { font-size: 14px; color: var(--muted); line-height: 1.8; margin-bottom: 10px; }
+    .policy-wrap ul { padding-left: 20px; }
+    .policy-wrap a { color: var(--accent); text-decoration: none; }
+    .back-link { display: inline-block; margin-bottom: 32px; font-size: 12px; font-family: 'Space Mono', monospace; color: var(--accent); text-decoration: none; letter-spacing: 1px; }
+    .back-link:hover { text-decoration: underline; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+  </style>
+</head>
+<body>
+  <div class="policy-wrap">
+    <a class="back-link" href="/signin">← Back to Sign In</a>
+
+    <h1>Privacy Policy</h1>
+    <p class="updated">Last updated: June 2, 2026</p>
+
+    <p>ZeroKey ("we", "our", or "us") is committed to protecting your privacy. This policy explains what data we collect, how we use it, and your rights regarding your information.</p>
+
+    <h2>1. What We Collect</h2>
+    <p>When you create an account or sign in, we may collect:</p>
+    <ul>
+      <li>Username and full name</li>
+      <li>Mobile number and date of birth (for account verification)</li>
+      <li>Email address (when signing in via Google)</li>
+      <li>Profile picture (provided by Google OAuth, if used)</li>
+      <li>Cryptographic public keys for FIDO2 passkey authentication</li>
+      <li>Login timestamps and IP addresses for security purposes</li>
+    </ul>
+
+    <h2>2. What We Do NOT Collect</h2>
+    <ul>
+      <li>We never store your password in plain text — all passwords are hashed using bcrypt</li>
+      <li>We never store biometric data (fingerprints, face scans) — these stay on your device</li>
+      <li>We never sell your data to third parties</li>
+      <li>We never display advertisements</li>
+    </ul>
+
+    <h2>3. How We Use Your Data</h2>
+    <ul>
+      <li>To authenticate your identity when you sign in</li>
+      <li>To maintain your account and session security</li>
+      <li>To detect and prevent unauthorized access</li>
+      <li>To improve the security and reliability of the service</li>
+    </ul>
+
+    <h2>4. Third Party Services</h2>
+    <p>We use the following third-party services:</p>
+    <ul>
+      <li><strong>Google OAuth 2.0</strong> — for "Sign in with Google". Google's privacy policy applies: <a href="https://policies.google.com/privacy" target="_blank">policies.google.com/privacy</a></li>
+      <li><strong>MongoDB Atlas</strong> — for secure cloud database storage</li>
+      <li><strong>Render.com</strong> — for application hosting</li>
+    </ul>
+
+    <h2>5. Data Storage & Security</h2>
+    <ul>
+      <li>All data is stored in MongoDB Atlas (cloud database) with encryption at rest</li>
+      <li>All communication is encrypted via HTTPS/TLS</li>
+      <li>Authentication tokens are stored in HTTP-only, Secure cookies</li>
+      <li>FIDO2 public keys are stored — private keys never leave your device</li>
+    </ul>
+
+    <h2>6. Data Retention</h2>
+    <p>We retain your account data for as long as your account is active. You may request deletion of your account and associated data at any time by contacting us.</p>
+
+    <h2>7. Your Rights</h2>
+    <ul>
+      <li>Access the data we hold about you</li>
+      <li>Request correction of inaccurate data</li>
+      <li>Request deletion of your account and data</li>
+      <li>Withdraw consent at any time</li>
+    </ul>
+
+    <h2>8. Contact</h2>
+    <p>For any privacy-related questions, contact us at: <a href="mailto:contact@zerokey.dev">contact@zerokey.dev</a></p>
+
+    <hr>
+    <p style="font-size:12px;">This privacy policy applies to the ZeroKey authentication system hosted at cybersec-ax8r.onrender.com. This is a research and development project.</p>
+  </div>
+</body>
+</html>
