@@ -30,6 +30,7 @@ from audit import (
     PASSKEY_REGISTERED, PASSKEY_DELETED, PASSKEY_RENAMED,
     GOOGLE_LOGIN, GOOGLE_SIGNUP,
 )
+from risk import calculate_risk, update_known_ips
 
 import webauthn
 from webauthn.helpers.structs import (
@@ -336,6 +337,19 @@ def signin():
             "message": f"Account locked. Try again in {minutes_left} minute(s)."
         }), 423
 
+    # ── Risk engine ───────────────────────────────────────
+    risk = calculate_risk(user, ip, users_collection, audit_collection)
+    if risk["action"] == "block":
+        log_event(audit_collection, LOGIN_FAILURE,
+                  username=username, ip=ip,
+                  auth_method="password", success=False,
+                  detail=f"Risk blocked — score {risk['score']} signals: {risk['signals']}")
+        return jsonify({
+            "success": False,
+            "message": "Login blocked due to suspicious activity. Please use your passkey or try again later.",
+            "risk_level": risk["level"]
+        }), 403
+
     try:
         valid = verify_password(password, user["password"])
     except Exception:
@@ -355,9 +369,11 @@ def signin():
 
     # ── Success — reset lockout counter ──────────────────
     reset_failed_attempts(username)
+    update_known_ips(users_collection, username, ip)
     log_event(audit_collection, LOGIN_SUCCESS,
               username=username, ip=ip,
-              auth_method="password", success=True)
+              auth_method="password", success=True,
+              detail=f"risk:{risk['level']} score:{risk['score']}")
 
     session["username"] = username
     token    = issue_jwt(username, auth_method="password")
@@ -735,6 +751,21 @@ def fido2_auth_complete():
     if not stored:
         return jsonify({"success": False, "message": "Passkey not recognised"}), 400
 
+    # ── Risk engine (lighter check for FIDO2 — already phishing resistant) ──
+    user = users_collection.find_one({"username": username})
+    if user:
+        risk = calculate_risk(user, ip, users_collection, audit_collection)
+        if risk["action"] == "block":
+            log_event(audit_collection, LOGIN_FAILURE,
+                      username=username, ip=ip,
+                      auth_method="fido2", success=False,
+                      detail=f"Risk blocked — score {risk['score']} signals: {risk['signals']}")
+            return jsonify({
+                "success": False,
+                "message": "Login blocked due to suspicious activity. Please try again later.",
+                "risk_level": risk["level"]
+            }), 403
+
     try:
         verification = webauthn.verify_authentication_response(
             credential=data,
@@ -753,10 +784,13 @@ def fido2_auth_complete():
         return jsonify({"success": False, "message": f"Verification failed: {str(e)}"}), 400
 
     update_sign_count(creds_collection, credential_id_bytes, verification.new_sign_count)
+    update_known_ips(users_collection, username, ip)
 
+    risk_detail = f"risk:{risk['level']} score:{risk['score']}" if user else "risk:unknown"
     log_event(audit_collection, LOGIN_SUCCESS,
               username=username, ip=ip,
-              auth_method="fido2", success=True)
+              auth_method="fido2", success=True,
+              detail=risk_detail)
 
     token    = issue_jwt(username, auth_method="fido2")
     response = make_response(jsonify({"success": True, "message": "Passkey login successful"}))
