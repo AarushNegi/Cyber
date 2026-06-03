@@ -167,6 +167,39 @@ def get_client_ip():
     # Render sits behind a proxy — X-Forwarded-For has the real IP
     return request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
 
+LOCKOUT_ATTEMPTS = 5
+LOCKOUT_MINUTES  = 15
+
+def is_account_locked(user: dict) -> tuple[bool, int]:
+    """
+    Returns (is_locked, minutes_remaining).
+    """
+    locked_until = user.get("locked_until")
+    if locked_until and locked_until > datetime.now(timezone.utc):
+        remaining = int((locked_until - datetime.now(timezone.utc)).total_seconds() / 60) + 1
+        return True, remaining
+    return False, 0
+
+
+def record_failed_attempt(username: str) -> None:
+    """Increment failed attempts. Lock account if threshold reached."""
+    user = users_collection.find_one({"username": username})
+    if not user:
+        return
+    attempts = user.get("failed_attempts", 0) + 1
+    update = {"failed_attempts": attempts}
+    if attempts >= LOCKOUT_ATTEMPTS:
+        update["locked_until"] = datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES)
+        update["failed_attempts"] = 0   # reset so next cycle works
+    users_collection.update_one({"username": username}, {"$set": update})
+
+def reset_failed_attempts(username: str) -> None:
+    """Clear failed attempts on successful login."""
+    users_collection.update_one(
+        {"username": username},
+        {"$set": {"failed_attempts": 0, "locked_until": None}}
+    )
+
 
 def jwt_required(redirect_on_fail=False):
     def decorator(f):
@@ -293,6 +326,18 @@ def signin():
                   detail="User not found")
         return jsonify({"success": False, "message": "Invalid credentials"}), 401
 
+    # ── Account lockout check ─────────────────────────────
+    locked, minutes_left = is_account_locked(user)
+    if locked:
+        log_event(audit_collection, LOGIN_FAILURE,
+                  username=username, ip=ip,
+                  auth_method="password", success=False,
+                  detail=f"Account locked — {minutes_left} min remaining")
+        return jsonify({
+            "success": False,
+            "message": f"Account locked. Try again in {minutes_left} minute(s)."
+        }), 423
+
     try:
         valid = verify_password(password, user["password"])
     except Exception:
@@ -303,12 +348,15 @@ def signin():
         return jsonify({"success": False, "message": "Auth error — please re-register"}), 500
 
     if not valid:
+        record_failed_attempt(username)
         log_event(audit_collection, LOGIN_FAILURE,
                   username=username, ip=ip,
                   auth_method="password", success=False,
                   detail="Wrong password")
         return jsonify({"success": False, "message": "Invalid credentials"}), 401
 
+    # ── Success — reset lockout counter ──────────────────
+    reset_failed_attempts(username)
     log_event(audit_collection, LOGIN_SUCCESS,
               username=username, ip=ip,
               auth_method="password", success=True)
