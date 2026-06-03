@@ -171,18 +171,17 @@ LOCKOUT_ATTEMPTS = 5
 LOCKOUT_MINUTES  = 15
 
 def is_account_locked(user: dict) -> tuple[bool, int]:
-    """
-    Returns (is_locked, minutes_remaining).
-    """
     locked_until = user.get("locked_until")
-    if locked_until and locked_until > datetime.now(timezone.utc):
-        remaining = int((locked_until - datetime.now(timezone.utc)).total_seconds() / 60) + 1
-        return True, remaining
+    if locked_until:
+        if locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=timezone.utc)
+        if locked_until > datetime.now(timezone.utc):
+            remaining = int((locked_until - datetime.now(timezone.utc)).total_seconds() / 60) + 1
+            return True, remaining
     return False, 0
 
 
 def record_failed_attempt(username: str) -> None:
-    """Increment failed attempts. Lock account if threshold reached."""
     user = users_collection.find_one({"username": username})
     if not user:
         return
@@ -194,7 +193,6 @@ def record_failed_attempt(username: str) -> None:
     users_collection.update_one({"username": username}, {"$set": update})
 
 def reset_failed_attempts(username: str) -> None:
-    """Clear failed attempts on successful login."""
     users_collection.update_one(
         {"username": username},
         {"$set": {"failed_attempts": 0, "locked_until": None}}
