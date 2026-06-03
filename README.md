@@ -28,7 +28,13 @@ The project implements the FIDO2/WebAuthn standard and provides a modern authent
 The goal is to eliminate password-related attacks while improving user experience and reducing IT support costs.
 
 ---
+## 🔒 Access Notice
 
+Registration is currently closed as this is a controlled security research deployment.
+
+This is intentional — ZeroKey uses a registration lock feature to prevent unauthorised account creation on the live instance.
+
+To explore the project locally, clone the repo and set `REGISTRATION_OPEN=true` in your `.env` file.
 ## 🎯 Problem Statement
 
 Traditional authentication systems suffer from:
