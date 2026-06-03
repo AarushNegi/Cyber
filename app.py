@@ -19,11 +19,17 @@ from flask import (
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask_talisman import Talisman
 from pymongo import MongoClient
 from jose import jwt, JWTError
 from dotenv import load_dotenv
 from authlib.integrations.flask_client import OAuth
+
+from audit import (
+    log_event,
+    LOGIN_SUCCESS, LOGIN_FAILURE, LOGOUT, SIGNUP,
+    PASSKEY_REGISTERED, PASSKEY_DELETED, PASSKEY_RENAMED,
+    GOOGLE_LOGIN, GOOGLE_SIGNUP,
+)
 
 import webauthn
 from webauthn.helpers.structs import (
@@ -52,17 +58,17 @@ from fido2_store import (
 
 load_dotenv()
 
-MONGO_URI           = os.getenv("MONGO_URI",           "mongodb://localhost:27017/")
-JWT_SECRET          = os.getenv("JWT_SECRET",           "change-this-secret")
-FLASK_SECRET        = os.getenv("FLASK_SECRET_KEY",     "change-this-secret")
-JWT_ALGORITHM       = "HS256"
-JWT_EXPIRY_MINS     = int(os.getenv("JWT_EXPIRY_MINUTES", "60"))
-APP_ORIGIN          = os.getenv("APP_ORIGIN",           "http://localhost:5000")
-IS_PRODUCTION       = os.getenv("FLASK_ENV", "development") == "production"
-RP_ID               = os.getenv("RP_ID",   "localhost")
-RP_NAME             = os.getenv("RP_NAME", "ZeroKey Auth")
-GOOGLE_CLIENT_ID    = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET= os.getenv("GOOGLE_CLIENT_SECRET")
+MONGO_URI            = os.getenv("MONGO_URI",           "mongodb://localhost:27017/")
+JWT_SECRET           = os.getenv("JWT_SECRET",           "change-this-secret")
+FLASK_SECRET         = os.getenv("FLASK_SECRET_KEY",     "change-this-secret")
+JWT_ALGORITHM        = "HS256"
+JWT_EXPIRY_MINS      = int(os.getenv("JWT_EXPIRY_MINUTES", "60"))
+APP_ORIGIN           = os.getenv("APP_ORIGIN",           "http://localhost:5000")
+IS_PRODUCTION        = os.getenv("FLASK_ENV", "development") == "production"
+RP_ID                = os.getenv("RP_ID",   "localhost")
+RP_NAME              = os.getenv("RP_NAME", "ZeroKey Auth")
+GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -93,45 +99,7 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 # Security headers — Flask-Talisman
 # ─────────────────────────────────────────────────────────────
 
-csp = {
-    'default-src': ["'self'"],
-    'script-src': [
-        "'self'",
-        "https://accounts.google.com",
-        "https://apis.google.com",
-    ],
-    'style-src': [
-        "'self'",
-        "'unsafe-inline'",
-        "https://fonts.googleapis.com",
-    ],
-    'font-src': [
-        "'self'",
-        "https://fonts.gstatic.com",
-    ],
-    'img-src': [
-        "'self'",
-        "data:",
-        "https://lh3.googleusercontent.com",
-    ],
-    'frame-src': [
-        "https://accounts.google.com",
-    ],
-    'connect-src': ["'self'"],
-}
 
-Talisman(
-    app,
-    force_https=IS_PRODUCTION,
-    strict_transport_security=IS_PRODUCTION,
-    strict_transport_security_max_age=31536000,
-    strict_transport_security_include_subdomains=True,
-    content_security_policy=csp,
-    x_content_type_options=True,
-    x_xss_protection=True,
-    referrer_policy='strict-origin-when-cross-origin',
-    frame_options='DENY',
-)
 
 # ─────────────────────────────────────────────────────────────
 # Google OAuth setup
@@ -151,10 +119,11 @@ google = oauth.register(
 # MongoDB
 # ─────────────────────────────────────────────────────────────
 
-client           = MongoClient(MONGO_URI)
-database         = client["users"]
-users_collection = database["mails"]
-creds_collection = database["fido2_credentials"]
+client            = MongoClient(MONGO_URI)
+database          = client["users"]
+users_collection  = database["mails"]
+creds_collection  = database["fido2_credentials"]
+audit_collection  = database["audit_logs"]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -192,6 +161,11 @@ def get_current_user():
         return payload.get("sub")
     except JWTError:
         return None
+
+
+def get_client_ip():
+    # Render sits behind a proxy — X-Forwarded-For has the real IP
+    return request.headers.get("X-Forwarded-For", request.remote_addr).split(",")[0].strip()
 
 
 def jwt_required(redirect_on_fail=False):
@@ -233,9 +207,20 @@ def dashboard():
     return render_template("dashboard.html")
 
 
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html")
+
+
+@app.route("/terms")
+def terms():
+    return render_template("terms.html")
+
+
 # ─────────────────────────────────────────────────────────────
 # Signup
 # ─────────────────────────────────────────────────────────────
+
 @app.route("/signup", methods=["POST"])
 @limiter.limit("10 per minute")
 def signup():
@@ -251,7 +236,7 @@ def signup():
     full_name = data.get("full_name", "").strip()
     mobile    = data.get("mobile",    "").strip()
     dob       = data.get("dob",       "").strip()
-    
+
     error = validate_input(username, password)
     if error:
         return jsonify({"success": False, "message": error}), 400
@@ -274,19 +259,12 @@ def signup():
         "created_at":  datetime.now(timezone.utc),
         "is_active":   True
     })
+
+    log_event(audit_collection, SIGNUP,
+              username=username, ip=get_client_ip(),
+              auth_method="password", success=True)
+
     return jsonify({"success": True, "message": "Account created successfully"}), 201
-
-#-------------------------------------------------------------
-# Terms and Privacy routes
-#-------------------------------------------------------------
-
-@app.route("/privacy")
-def privacy():
-    return render_template("privacy.html")
-
-@app.route("/terms")
-def terms():
-    return render_template("terms.html")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -302,21 +280,38 @@ def signin():
 
     username = data.get("username", "").strip()
     password = data.get("password", "")
+    ip       = get_client_ip()
 
     if not username or not password:
         return jsonify({"success": False, "message": "Username and password are required"}), 400
 
     user = users_collection.find_one({"username": username})
     if not user:
+        log_event(audit_collection, LOGIN_FAILURE,
+                  username=username, ip=ip,
+                  auth_method="password", success=False,
+                  detail="User not found")
         return jsonify({"success": False, "message": "Invalid credentials"}), 401
 
     try:
         valid = verify_password(password, user["password"])
     except Exception:
+        log_event(audit_collection, LOGIN_FAILURE,
+                  username=username, ip=ip,
+                  auth_method="password", success=False,
+                  detail="Password hash error")
         return jsonify({"success": False, "message": "Auth error — please re-register"}), 500
 
     if not valid:
+        log_event(audit_collection, LOGIN_FAILURE,
+                  username=username, ip=ip,
+                  auth_method="password", success=False,
+                  detail="Wrong password")
         return jsonify({"success": False, "message": "Invalid credentials"}), 401
+
+    log_event(audit_collection, LOGIN_SUCCESS,
+              username=username, ip=ip,
+              auth_method="password", success=True)
 
     session["username"] = username
     token    = issue_jwt(username, auth_method="password")
@@ -332,42 +327,31 @@ def signin():
 
 # ─────────────────────────────────────────────────────────────
 # Google OAuth
-#
-# Flow:
-#   1. User clicks "Sign in with Google" on signin page
-#   2. GET /auth/google          → redirects to Google login
-#   3. Google redirects back to  → GET /auth/google/callback
-#   4. We get user info from Google, find/create user in MongoDB
-#   5. Issue JWT → redirect to dashboard
 # ─────────────────────────────────────────────────────────────
 
 @app.route("/auth/google")
 def google_login():
-    """Redirect user to Google's OAuth consent screen."""
     redirect_uri = APP_ORIGIN + "/auth/google/callback"
     return google.authorize_redirect(redirect_uri)
 
 
 @app.route("/auth/google/callback")
 def google_callback():
-    """Handle Google's redirect back after login."""
+    ip = get_client_ip()
     try:
-        token       = google.authorize_access_token()
-        user_info   = token.get("userinfo")
+        token     = google.authorize_access_token()
+        user_info = token.get("userinfo")
 
         if not user_info:
             return redirect("/signin?error=google_failed")
 
-        google_id   = user_info.get("sub")           # unique Google user ID
-        email       = user_info.get("email")
-        full_name   = user_info.get("name", "")
-        picture     = user_info.get("picture", "")
+        google_id  = user_info.get("sub")
+        email      = user_info.get("email")
+        full_name  = user_info.get("name", "")
+        picture    = user_info.get("picture", "")
 
-        # Use email prefix as username (e.g. john from john@gmail.com)
-        # Clean it to match our username rules
         base_username = re.sub(r"[^a-zA-Z0-9_.-]", "_", email.split("@")[0])[:32]
 
-        # Find existing user by google_id OR email
         user = users_collection.find_one({
             "$or": [
                 {"google_id": google_id},
@@ -376,24 +360,28 @@ def google_callback():
         })
 
         if user:
-            # Existing user — update Google info if needed
             users_collection.update_one(
                 {"_id": user["_id"]},
                 {"$set": {
-                    "google_id":   google_id,
-                    "picture":     picture,
-                    "last_login":  datetime.now(timezone.utc),
+                    "google_id":  google_id,
+                    "picture":    picture,
+                    "last_login": datetime.now(timezone.utc),
                 }}
             )
             username = user["username"]
+            log_event(audit_collection, GOOGLE_LOGIN,
+                      username=username, ip=ip,
+                      auth_method="google", success=True)
         else:
-            # Block new registrations if closed
             if os.getenv("REGISTRATION_OPEN", "true") == "false":
+                log_event(audit_collection, GOOGLE_SIGNUP,
+                          username=None, ip=ip,
+                          auth_method="google", success=False,
+                          detail="Registration closed")
                 return redirect("/signin?error=registration_closed")
-            # New user via Google — create account automatically
-            # Make sure username is unique
-            username    = base_username
-            counter     = 1
+
+            username = base_username
+            counter  = 1
             while users_collection.find_one({"username": username}):
                 username = f"{base_username}{counter}"
                 counter += 1
@@ -404,7 +392,7 @@ def google_callback():
                 "email":       email,
                 "google_id":   google_id,
                 "picture":     picture,
-                "password":    None,            # no password for Google users
+                "password":    None,
                 "mobile":      "",
                 "dob":         "",
                 "auth_method": "google",
@@ -412,7 +400,10 @@ def google_callback():
                 "is_active":   True,
             })
 
-        # Issue JWT and set cookie — same as password login
+            log_event(audit_collection, GOOGLE_SIGNUP,
+                      username=username, ip=ip,
+                      auth_method="google", success=True)
+
         session["username"] = username
         jwt_token = issue_jwt(username, auth_method="google")
         response  = make_response(redirect("/dashboard"))
@@ -426,6 +417,10 @@ def google_callback():
 
     except Exception as e:
         print(f"Google OAuth error: {e}")
+        log_event(audit_collection, GOOGLE_LOGIN,
+                  username=None, ip=ip,
+                  auth_method="google", success=False,
+                  detail=str(e))
         return redirect("/signin?error=google_failed")
 
 
@@ -435,6 +430,10 @@ def google_callback():
 
 @app.route("/logout", methods=["POST"])
 def logout():
+    username = get_current_user()
+    log_event(audit_collection, LOGOUT,
+              username=username, ip=get_client_ip(),
+              auth_method=None, success=True)
     session.clear()
     response = make_response(jsonify({"success": True, "message": "Logged out"}))
     response.delete_cookie("auth_token")
@@ -509,8 +508,9 @@ def fido2_register_begin():
 @jwt_required()
 @limiter.limit("10 per minute")
 def fido2_register_complete():
-    username  = request.current_user
-    data      = request.get_json(silent=True)
+    username = request.current_user
+    data     = request.get_json(silent=True)
+    ip       = get_client_ip()
 
     if not data:
         return jsonify({"success": False, "message": "No data received"}), 400
@@ -528,9 +528,18 @@ def fido2_register_complete():
             require_user_verification=True,
         )
     except Exception as e:
+        log_event(audit_collection, PASSKEY_REGISTERED,
+                  username=username, ip=ip,
+                  auth_method="fido2", success=False,
+                  detail=str(e))
         return jsonify({"success": False, "message": f"Verification failed: {str(e)}"}), 400
 
     save_credential(creds_collection, username, verification)
+
+    log_event(audit_collection, PASSKEY_REGISTERED,
+              username=username, ip=ip,
+              auth_method="fido2", success=True)
+
     return jsonify({"success": True, "message": "Passkey registered successfully"})
 
 
@@ -558,16 +567,25 @@ def list_credentials():
 @jwt_required()
 def delete_credential_route(cred_id):
     username = request.current_user
+    ip       = get_client_ip()
     total    = creds_collection.count_documents({"username": username})
+
     if total <= 1:
         return jsonify({"success": False, "message": "Cannot delete your only passkey — you would be locked out"}), 400
+
     try:
         cred_bytes = bytes.fromhex(cred_id)
     except ValueError:
         return jsonify({"success": False, "message": "Invalid credential ID"}), 400
+
     deleted = delete_credential(creds_collection, cred_bytes, username)
     if not deleted:
         return jsonify({"success": False, "message": "Passkey not found"}), 404
+
+    log_event(audit_collection, PASSKEY_DELETED,
+              username=username, ip=ip,
+              auth_method="fido2", success=True)
+
     return jsonify({"success": True, "message": "Passkey deleted"})
 
 
@@ -575,20 +593,31 @@ def delete_credential_route(cred_id):
 @jwt_required()
 def rename_credential(cred_id):
     username = request.current_user
+    ip       = get_client_ip()
     data     = request.get_json(silent=True)
     new_name = (data or {}).get("name", "").strip()
+
     if not new_name or len(new_name) > 40:
         return jsonify({"success": False, "message": "Name must be 1–40 characters"}), 400
+
     try:
         cred_bytes = bytes.fromhex(cred_id)
     except ValueError:
         return jsonify({"success": False, "message": "Invalid credential ID"}), 400
+
     result = creds_collection.update_one(
         {"credential_id": cred_bytes, "username": username},
         {"$set": {"device_name": new_name}}
     )
+
     if result.matched_count == 0:
         return jsonify({"success": False, "message": "Passkey not found"}), 404
+
+    log_event(audit_collection, PASSKEY_RENAMED,
+              username=username, ip=ip,
+              auth_method="fido2", success=True,
+              detail=f"Renamed to: {new_name}")
+
     return jsonify({"success": True, "message": "Passkey renamed"})
 
 
@@ -637,6 +666,7 @@ def fido2_auth_begin():
 def fido2_auth_complete():
     data     = request.get_json(silent=True)
     username = (data or {}).get("username", "").strip()
+    ip       = get_client_ip()
 
     if not username or not data:
         return jsonify({"success": False, "message": "Invalid request"}), 400
@@ -670,9 +700,17 @@ def fido2_auth_complete():
             require_user_verification=True,
         )
     except Exception as e:
+        log_event(audit_collection, LOGIN_FAILURE,
+                  username=username, ip=ip,
+                  auth_method="fido2", success=False,
+                  detail=str(e))
         return jsonify({"success": False, "message": f"Verification failed: {str(e)}"}), 400
 
     update_sign_count(creds_collection, credential_id_bytes, verification.new_sign_count)
+
+    log_event(audit_collection, LOGIN_SUCCESS,
+              username=username, ip=ip,
+              auth_method="fido2", success=True)
 
     token    = issue_jwt(username, auth_method="fido2")
     response = make_response(jsonify({"success": True, "message": "Passkey login successful"}))

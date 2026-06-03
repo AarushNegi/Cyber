@@ -11,6 +11,7 @@ Safe to run multiple times — MongoDB ignores indexes that already exist.
 from pymongo import MongoClient, ASCENDING
 from dotenv import load_dotenv
 import os
+import db
 
 load_dotenv()
 
@@ -34,3 +35,11 @@ creds.create_index([("username", ASCENDING)])
 print("✓ fido2_credentials  →  index on username")
 
 print("\nDone. Your MongoDB is ready for Stage 2.")
+
+# Audit logs indexes
+audit_logs = database["audit_logs"]
+audit_logs.create_index("username")
+audit_logs.create_index("event_type")
+audit_logs.create_index("timestamp")
+audit_logs.create_index([("username", 1), ("timestamp", -1)])  # most common query
+print("audit_logs indexes created")
