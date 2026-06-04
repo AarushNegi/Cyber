@@ -1,0 +1,73 @@
+GET https://cybersec-ax8r.onrender.com HTTP/1.1
+host: cybersec-ax8r.onrender.com
+user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36
+pragma: no-cache
+cache-control: no-cache
+
+HTTP/1.1 200 OK
+Date: Thu, 04 Jun 2026 04:54:19 GMT
+Content-Type: text/html; charset=utf-8
+Connection: keep-alive
+access-control-allow-credentials: true
+access-control-allow-origin: https://cybersec-ax8r.onrender.com
+cf-cache-status: DYNAMIC
+rndr-id: 0af48e9f-7ca8-4ab7
+Server: cloudflare
+vary: Accept-Encoding
+x-render-origin-server: gunicorn
+CF-RAY: a06456c16f233e10-BOM
+alt-svc: h3=":443"; ma=86400
+content-length: 1595
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign Up — ZeroKey</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="auth-page">
+  <div class="card">
+    <div class="logo">⬡ ZeroKey</div>
+    <h1>Create account</h1>
+    <p class="subtitle">Start with a secure passwordless-ready setup</p>
+
+    <div class="field">
+      <label for="full_name">Full Name</label>
+      <input id="full_name" type="text" placeholder="e.g. Aarush Negi" autocomplete="name">
+    </div>
+
+    <div class="field">
+      <label for="username">Username</label>
+      <input id="username" type="text" placeholder="e.g. aarush_dev" autocomplete="username">
+      <p class="hint">Letters, numbers, _ . — (3–32 chars)</p>
+    </div>
+
+    <div class="field">
+      <label for="mobile">Mobile Number</label>
+      <input id="mobile" type="tel" placeholder="e.g. 9876543210" autocomplete="tel">
+    </div>
+
+    <div class="field">
+      <label for="dob">Date of Birth</label>
+      <input id="dob" type="date" autocomplete="bday">
+    </div>
+
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="Minimum 8 characters" autocomplete="new-password">
+    </div>
+
+    <button class="btn-primary" onclick="signup()">CREATE ACCOUNT</button>
+
+    <p id="msg"></p>
+
+    <div class="footer">
+      Already have an account? <a href="/signin">Sign in</a>
+    </div>
+  </div>
+
+  <script src="/static/auth.js"></script>
+</body>
+</html>

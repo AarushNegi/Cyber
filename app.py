@@ -97,8 +97,24 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # ─────────────────────────────────────────────────────────────
-# Security headers — Flask-Talisman
+# Security headers
 # ─────────────────────────────────────────────────────────────
+
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Frame-Options"]        = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"]        = "strict-origin-when-cross-origin"
+    response.headers["Cache-Control"]          = "no-store, no-cache, must-revalidate"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self';"
+    )
+    return response
 
 
 
@@ -170,6 +186,12 @@ def get_client_ip():
 
 LOCKOUT_ATTEMPTS = 5
 LOCKOUT_MINUTES  = 15
+
+def sanitise(value):
+    """Block MongoDB operator injection — reject any dict input."""
+    if isinstance(value, (dict, list)):
+        return None
+    return str(value) if value is not None else None
 
 def is_account_locked(user: dict) -> tuple[bool, int]:
     locked_until = user.get("locked_until")
@@ -263,12 +285,19 @@ def signup():
     if not data:
         return jsonify({"success": False, "message": "Invalid JSON body"}), 400
 
-    username  = data.get("username",  "").strip()
-    password  = data.get("password",  "")
-    full_name = data.get("full_name", "").strip()
-    mobile    = data.get("mobile",    "").strip()
-    dob       = data.get("dob",       "").strip()
+    username  = sanitise(data.get("username",  ""))
+    password  = sanitise(data.get("password",  ""))
+    full_name = sanitise(data.get("full_name", ""))
+    mobile    = sanitise(data.get("mobile",    ""))
+    dob       = sanitise(data.get("dob",       ""))
 
+    if not all([username, password, full_name, mobile, dob]):
+        return jsonify({"success": False, "message": "Invalid input"}), 400
+
+    username  = username.strip()
+    full_name = full_name.strip()
+    mobile    = mobile.strip()
+    dob       = dob.strip()
     error = validate_input(username, password)
     if error:
         return jsonify({"success": False, "message": error}), 400
@@ -310,9 +339,12 @@ def signin():
     if not data:
         return jsonify({"success": False, "message": "Invalid JSON body"}), 400
 
-    username = data.get("username", "").strip()
-    password = data.get("password", "")
-    ip       = get_client_ip()
+    username = sanitise(data.get("username", ""))
+    password = sanitise(data.get("password", ""))
+    if not username or not password:
+        return jsonify({"success": False, "message": "Invalid credentials"}), 400
+    username = username.strip()
+    ip= get_client_ip()
 
     if not username or not password:
         return jsonify({"success": False, "message": "Username and password are required"}), 400
