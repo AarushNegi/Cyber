@@ -107,13 +107,15 @@ def set_security_headers(response):
     response.headers["Referrer-Policy"]        = "strict-origin-when-cross-origin"
     response.headers["Cache-Control"]          = "no-store, no-cache, must-revalidate"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
-        "img-src 'self' data: https:; "
-        "connect-src 'self';"
-    )
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: https://lh3.googleusercontent.com; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self';"
+  )
     return response
 
 
