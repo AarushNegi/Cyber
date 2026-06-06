@@ -314,6 +314,6 @@ https://github.com/AarushNegi
 
 ## ⭐ Why ZeroKey?
 
-ZeroKey demonstrates how modern authentication systems can eliminate password-related risks through FIDO2 and WebAuthn while providing a seamless user experience.
+ZeroKey demonstrates how modern authentication systems can eliminate password-related risks through FIDO2 and WebAuthn while providing a seamless user experience. NO need to remember passwords in case of emengercy
 
 This project serves as both a practical cybersecurity implementation and a foundation for a future enterprise authentication platform.
